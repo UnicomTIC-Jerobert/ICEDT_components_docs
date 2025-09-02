@@ -396,12 +396,12 @@ This manual step correctly establishes the trust relationship between CloudFront
 ---
 
 still get this message
-
+```xml
 <Error>
 <Code>AccessDenied</Code>
 <Message>Access Denied</Message>
 </Error>
-
+```
 
 Okay, an **Access Denied** error after you've set the bucket policy is a very specific and frustrating problem. This almost always means there is a mismatch or a conflicting policy somewhere in your setup.
 
