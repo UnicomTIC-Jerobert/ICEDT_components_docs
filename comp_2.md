@@ -382,3 +382,285 @@ case 13:
 // ...
 ```
 This demonstrates how the renderer can host different "flavors" of MCQ based on the JSON structure, while the `ActivityPlayerModal` provides the overall navigation between the individual questions in the `questions` array.
+
+
+### ** Fixed Issues **
+
+You are absolutely right. The components described in that document (`CharacterGrid` and `WordPairMCQ`) are following the old, incorrect pattern where the component itself tries to manage the array of exercises.
+
+Let's refactor both of them to adhere to our final, correct architecture:
+1.  The component will be **"dumb"** and only know how to render a **single** exercise/question.
+2.  The props interface will accept a **single content object**, not an array.
+3.  All navigation logic (Next/Previous) is removed. This is the responsibility of the `ActivityPlayerModal`.
+4.  The type definitions will be **colocated** in the same file as the component.
+
+Here are the complete, refactored versions of both components.
+
+---
+
+### **Component 1: `<CharacterGrid />` (Refactored)**
+
+This component will now render a single grid for a single "find all these letters" challenge. The `ActivityPlayerModal` will handle switching between different pages/challenges.
+
+**File: `src/components/activities/activity-types/CharacterGrid.tsx` (Refactored)**
+```typescript
+import React, { useState, useEffect, useRef } from 'react';
+import { Box, Typography, Paper, Grid, IconButton, Button } from '@mui/material';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ReplayIcon from '@mui/icons-material/Replay';
+import VolumeUpIcon from '@mui/icons-material/VolumeUp';
+
+// --- COLOCATED TYPES ---
+export interface CharacterGridItem {
+    id: number;
+    character: string;
+    audioUrl: string;
+}
+
+// This is the content for a SINGLE page/grid
+export interface CharacterGridContent {
+    title: string;
+    gridItems: CharacterGridItem[];
+    correctItemIds: number[];
+}
+
+// --- PROPS INTERFACE ---
+interface CharacterGridProps {
+    content: CharacterGridContent;
+}
+
+const CharacterGrid: React.FC<CharacterGridProps> = ({ content }) => {
+    // State is now only for this single grid
+    const [foundItems, setFoundItems] = useState<number[]>([]);
+    const [currentItemToFindIndex, setCurrentItemToFindIndex] = useState(0);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    const currentCorrectIds = content.correctItemIds;
+    const currentItemToFind = content.gridItems.find(item => item.id === currentCorrectIds[currentItemToFindIndex]);
+
+    // Reset game when the content prop (a new grid) changes
+    useEffect(() => {
+        setFoundItems([]);
+        setCurrentItemToFindIndex(0);
+    }, [content]);
+
+    // Autoplay the sound for the next item to find
+    useEffect(() => {
+        if (currentItemToFind?.audioUrl) {
+            const timer = setTimeout(() => playAudio(currentItemToFind.audioUrl), 500);
+            return () => clearTimeout(timer);
+        }
+    }, [currentItemToFind]);
+
+    const playAudio = (audioUrl: string) => {
+        if (audioRef.current) {
+            audioRef.current.src = audioUrl;
+            audioRef.current.play().catch(e => console.error("Audio playback failed:", e));
+        }
+    };
+
+    const handleCharacterClick = (clickedItemId: number) => {
+        if (foundItems.includes(clickedItemId) || !currentItemToFind) return;
+
+        if (clickedItemId === currentItemToFind.id) {
+            setFoundItems(prev => [...prev, clickedItemId]);
+            setCurrentItemToFindIndex(prev => prev + 1);
+        }
+    };
+
+    const isComplete = foundItems.length === currentCorrectIds.length;
+
+    return (
+        <Box p={2} sx={{ fontFamily: 'sans-serif', textAlign: 'center', height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Typography variant="h5" component="h1" gutterBottom>{content.title}</Typography>
+            
+            <Paper elevation={2} sx={{ p: 1, mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+                <Typography variant="h6">Listen:</Typography>
+                <IconButton onClick={() => currentItemToFind && playAudio(currentItemToFind.audioUrl)} disabled={isComplete}>
+                    <VolumeUpIcon fontSize="large" color="primary" />
+                </IconButton>
+            </Paper>
+
+            <Box sx={{ flexGrow: 1 }}>
+                <Grid container spacing={1} justifyContent="center" alignItems="center">
+                    {content.gridItems.map(item => {
+                        const isFound = foundItems.includes(item.id);
+                        return (
+                            <Grid item key={item.id} xs={3} sm={2}>
+                                <Paper
+                                    onClick={() => handleCharacterClick(item.id)}
+                                    sx={{
+                                        aspectRatio: '1 / 1', display: 'flex', alignItems: 'center',
+                                        justifyContent: 'center', cursor: 'pointer', borderRadius: '8px',
+                                        border: '2px solid', borderColor: isFound ? 'success.main' : 'grey.300',
+                                        backgroundColor: isFound ? 'success.light' : 'white',
+                                        transition: 'transform 0.2s', '&:hover': { transform: 'scale(1.1)' }
+                                    }}
+                                >
+                                    <Typography variant="h3" fontWeight="bold">{item.character}</Typography>
+                                </Paper>
+                            </Grid>
+                        );
+                    })}
+                </Grid>
+            </Box>
+            
+            <Box sx={{ height: '80px', mt: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {isComplete && (
+                    <Box textAlign="center">
+                        <Typography variant="h5" color="success.main">Well Done!</Typography>
+                    </Box>
+                )}
+            </Box>
+
+            <audio ref={audioRef} style={{ display: 'none' }} />
+        </Box>
+    );
+};
+
+export default CharacterGrid;
+```
+
+---
+
+### **Component 2: `<WordPairMCQ />` (Refactored)**
+
+This component will now render a single word-pair question. The `ActivityPlayerModal` will be responsible for passing the next question from the `questions` array in the `ContentJson`.
+
+**File: `src/components/activities/activity-types/WordPairMCQ.tsx` (Refactored)**
+```typescript
+import React, { useState, useEffect, useRef } from 'react';
+import { Box, Typography, Paper, Button, IconButton } from '@mui/material';
+import VolumeUpIcon from '@mui/icons-material/VolumeUp';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
+import ReplayIcon from '@mui/icons-material/Replay';
+
+// --- COLOCATED TYPES ---
+export interface WordPairQuestion {
+    id: number;
+    promptAudioUrl: string; 
+    choices: [string, string];
+    correctAnswer: string;
+}
+
+// This is the top-level structure.
+// The ActivityPlayerModal will loop through the 'questions' array.
+export interface WordPairMCQContent {
+    title: string;
+    questions: WordPairQuestion[];
+}
+
+// --- PROPS INTERFACE ---
+// The component receives a SINGLE question object.
+interface WordPairProps {
+    content: WordPairQuestion;
+}
+
+const WordPairMCQ: React.FC<WordPairProps> = ({ content: question }) => {
+    const [userAnswer, setUserAnswer] = useState<string | null>(null);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    // Reset state and autoplay sound when the question prop changes
+    useEffect(() => {
+        setUserAnswer(null);
+        const timer = setTimeout(() => playAudio(), 300);
+        return () => clearTimeout(timer);
+    }, [question]);
+
+    const playAudio = () => {
+        if (audioRef.current) {
+            audioRef.current.play().catch(e => console.error(e));
+        }
+    };
+
+    const handleAnswer = (choice: string) => {
+        if (userAnswer) return; // Already answered
+        setUserAnswer(choice);
+    };
+
+    return (
+        <Box p={2} textAlign="center">
+            <audio ref={audioRef} src={question.promptAudioUrl} />
+            <Paper elevation={2} sx={{ p: 2, mb: 4 }}>
+                <Typography variant="h6">Listen and choose the correct word:</Typography>
+                <IconButton onClick={playAudio}><VolumeUpIcon fontSize="large" color="primary" /></IconButton>
+            </Paper>
+
+            <Box display="flex" justifyContent="space-around" alignItems="center">
+                {question.choices.map(choice => {
+                    const isSelected = userAnswer === choice;
+                    const isCorrect = choice === question.correctAnswer;
+                    let color: "success" | "error" | "primary" = "primary";
+                    if (isSelected) {
+                        color = isCorrect ? "success" : "error";
+                    }
+
+                    return (
+                        <Button
+                            key={choice}
+                            variant={userAnswer ? 'contained' : 'outlined'}
+                            color={color}
+                            onClick={() => handleAnswer(choice)}
+                            disabled={!!userAnswer && !isSelected}
+                            sx={{ fontSize: '2rem', padding: '20px 40px', textTransform: 'none', minWidth: '180px' }}
+                        >
+                            {choice}
+                            {isSelected && isCorrect && <CheckCircleIcon sx={{ ml: 2 }} />}
+                            {isSelected && !isCorrect && <CancelIcon sx={{ ml: 2 }} />}
+                        </Button>
+                    );
+                })}
+            </Box>
+
+            {userAnswer && !(userAnswer === question.correctAnswer) && (
+                <Typography variant="h6" color="success.main" mt={3}>
+                    Correct Answer: {question.correctAnswer}
+                </Typography>
+            )}
+        </Box>
+    );
+};
+
+export default WordPairMCQ;
+```
+
+### **Integration into `ActivityRenderer.tsx`**
+
+Your renderer now has a very clear job for these components.
+
+```typescript
+// In ActivityRenderer.tsx
+
+// ... (imports for the new components and their types)
+import CharacterGrid, { CharacterGridContent } from '../activity-types/CharacterGrid';
+import WordPairMCQ, { WordPairQuestion, WordPairMCQContent } from '../activity-types/WordPairMCQ';
+
+// ...
+
+const ActivityRenderer: React.FC<ActivityRendererProps> = ({ activityTypeId, content }) => {
+    switch (activityTypeId) {
+        case 2:
+            // ...
+            // The ActivityPlayerModal will pass a SINGLE grid object to 'content'
+            if ('gridItems' in content && 'correctItemIds' in content) {
+                return <CharacterGrid content={content as CharacterGridContent} />;
+            }
+            // ...
+            break;
+
+        case 13:
+            // ...
+            // The ActivityPlayerModal will pass a SINGLE question object to 'content'
+            if ('promptAudioUrl' in content && 'choices' in content) {
+                return <WordPairMCQ content={content as WordPairQuestion} />;
+            }
+            // Fallback to the original MCQ component
+            return <MCQActivity content={content as MCQContent} />;
+            
+        // ...
+    }
+}
+```
+
+This completes the refactoring. Both components are now simple, stateless (in terms of sequence), and correctly follow the "dumb component, smart player" architecture.
