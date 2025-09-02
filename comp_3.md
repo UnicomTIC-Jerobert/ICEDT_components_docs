@@ -207,3 +207,195 @@ new Activity
 ```
 
 This completes the setup for your new `<WordFinder />` component. You have successfully analyzed the activity, designed a clean data structure for it, created the React component, and integrated it into your system.
+
+### ** Fixed Issue **
+
+You are absolutely correct. Let's apply our final, correct architectural pattern to the `<WordFinder />` component.
+
+The `ContentJson` for the activity will be a single object containing an array of `challenges`. The `ActivityPlayerModal` will manage this array, and the `<WordFinder />` component will be a "dumb" component that only knows how to render a **single challenge** at a time.
+
+This will make it perfectly consistent with all the other components we've refactored.
+
+---
+
+### **Step 1: The Correct `ContentJson` and Type Definitions**
+
+The types defined in the document are already perfect for this model. We will colocate them with the component.
+
+```typescript
+// --- COLOCATED TYPES (inside WordFinder.tsx) ---
+export interface WordFinderChallenge {
+    targetLetter: string;
+    wordGrid: string[];
+    correctWords: string[];
+}
+
+// The top-level structure for the entire activity
+export interface WordFinderContent {
+    title: string;
+    challenges: WordFinderChallenge[];
+}
+```
+The `ContentJson` in the database will be a single `WordFinderContent` object.
+
+---
+
+### **Step 2: Refactor the `<WordFinder />` Component**
+
+This component will now be much simpler. It will receive a single `WordFinderChallenge` object as its `content` prop and will manage the state for just that one round.
+
+**File: `src/components/activities/activity-types/WordFinder.tsx` (Refactored and Final)**
+```typescript
+import React, { useState, useEffect } from 'react';
+import { Box, Typography, Paper, Chip, Button } from '@mui/material';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ReplayIcon from '@mui/icons-material/Replay';
+
+// --- COLOCATED TYPES ---
+export interface WordFinderChallenge {
+    targetLetter: string;
+    wordGrid: string[];
+    correctWords: string[];
+}
+
+export interface WordFinderContent {
+    title: string;
+    challenges: WordFinderChallenge[];
+}
+
+// --- PROPS INTERFACE for the "DUMB" component ---
+// It receives a SINGLE challenge to render.
+interface WordFinderProps {
+    content: WordFinderChallenge;
+}
+
+const WordFinder: React.FC<WordFinderProps> = ({ content }) => {
+    const [foundWords, setFoundWords] = useState<string[]>([]);
+    const [incorrectGuesses, setIncorrectGuesses] = useState<string[]>([]);
+
+    // Reset the state whenever a new challenge (content prop) is passed in
+    useEffect(() => {
+        setFoundWords([]);
+        setIncorrectGuesses([]);
+    }, [content]);
+
+    const handleWordClick = (word: string) => {
+        // Don't allow clicking an already found word
+        if (foundWords.includes(word)) return;
+
+        if (content.correctWords.includes(word)) {
+            setFoundWords(prev => [...prev, word]);
+        } else {
+            setIncorrectGuesses(prev => [...prev, word]);
+            // Give feedback by clearing the incorrect guess after a moment
+            setTimeout(() => {
+                setIncorrectGuesses(prev => prev.filter(w => w !== word));
+            }, 500);
+        }
+    };
+    
+    const handleReset = () => {
+        setFoundWords([]);
+        setIncorrectGuesses([]);
+    };
+
+    const isComplete = foundWords.length === content.correctWords.length;
+
+    const getChipColor = (word: string): "success" | "error" | "primary" => {
+        if (foundWords.includes(word)) return "success";
+        if (incorrectGuesses.includes(word)) return "error";
+        return "primary";
+    };
+
+    return (
+        <Box p={3} sx={{ fontFamily: 'sans-serif', textAlign: 'center' }}>
+            <Paper elevation={4} sx={{ p: 2, mb: 4, backgroundColor: 'secondary.main', color: 'white' }}>
+                <Typography variant="h6">Find all words with this letter:</Typography>
+                <Typography variant="h1" sx={{ fontWeight: 'bold' }}>
+                    {content.targetLetter}
+                </Typography>
+            </Paper>
+
+            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, flexWrap: 'wrap' }}>
+                {content.wordGrid.map(word => (
+                    <Chip
+                        key={word}
+                        label={word}
+                        onClick={() => handleWordClick(word)}
+                        disabled={foundWords.includes(word)}
+                        sx={{ fontSize: '1.5rem', padding: '24px 12px', cursor: 'pointer' }}
+                        color={getChipColor(word)}
+                        variant="outlined"
+                    />
+                ))}
+            </Box>
+
+            {isComplete && (
+                <Box mt={4} textAlign="center">
+                    <Typography variant="h5" color="success.main" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
+                        <CheckCircleIcon fontSize="large" /> Great Job!
+                    </Typography>
+                    <Button sx={{ mt: 2 }} variant="outlined" startIcon={<ReplayIcon />} onClick={handleReset}>
+                        Reset this round
+                    </Button>
+                </Box>
+            )}
+        </Box>
+    );
+};
+
+export default WordFinder;
+```
+
+---
+
+### **Step 3: Correct the `ActivityRenderer.tsx`**
+
+The renderer now knows to pass only a single `challenge` object to the `<WordFinder />` component.
+
+**File: `src/components/activities/previews/ActivityRenderer.tsx` (Corrected)**
+```typescript
+// ... (imports)
+import WordFinder, { WordFinderChallenge } from '../activity-types/WordFinder';
+
+// ...
+
+const ActivityRenderer: React.FC<ActivityRendererProps> = ({ activityTypeId, content }) => {
+    switch (activityTypeId) {
+        // ... (other cases)
+
+        case 4: // Matching Type
+            // 'content' here is a single challenge object passed down by ActivityPlayerModal
+            if ('targetLetter' in content && 'wordGrid' in content) {
+                return <WordFinder content={content as WordFinderChallenge} />;
+            }
+            // ... (other matching type checks)
+            break;
+            
+        // ...
+    }
+};
+```
+
+---
+
+### **How the Flow Works (The Correct Way)**
+
+1.  **`ActivityPlayerModal`:**
+    *   Receives the full `Activity` object.
+    *   Parses the `ContentJson` into a `WordFinderContent` object.
+    *   It sees the `challenges` array (e.g., `content.challenges`).
+    *   It manages the `currentExerciseIndex` state.
+    *   It provides "Next/Previous Exercise" buttons to navigate this `challenges` array.
+    *   It passes **only the current challenge object** (`content.challenges[currentExerciseIndex]`) to the `ActivityRenderer`.
+
+2.  **`ActivityRenderer`:**
+    *   Receives the single `challenge` object in its `content` prop.
+    *   The `switch` statement for `case 4` sees the `targetLetter` property and correctly renders the `<WordFinder />` component, passing the single `challenge` object to it.
+
+3.  **`<WordFinder />`:**
+    *   Receives a single `challenge` object.
+    *   Manages its own state for `foundWords` for just that one challenge.
+    *   When the user clicks "Next Exercise" in the parent modal, this component will receive a *new* `content` prop (the next challenge object), and its `useEffect` will correctly reset its state for the new round.
+
+This is the definitive, correct, and consistent architecture. You have successfully designed a powerful "mini-player" system.
