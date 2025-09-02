@@ -344,3 +344,199 @@ const ActivityRenderer: React.FC<ActivityRendererProps> = ({ activityTypeId, con
 5.  **Completion State:** After the final page is completed, it shows a "Well Done!" message and a "Play Again" button.
 
 This single, powerful component can now be used to create dozens of activities from your curriculum simply by providing different data in the `ContentJson`.
+
+### **Issues with the previous step**
+
+You are absolutely correct. Your analysis of the component design is spot-on.
+
+The original design of the `<RecognitionGrid />` component, which expected a `"pages"` array, was overly complex for our final architecture. We should simplify it to handle a **single grid of items**, just as you've proposed in your desired JSON structure.
+
+This makes the component simpler and perfectly aligns with our established "player" architecture, where the `ActivityPlayerModal` is responsible for navigating between different exercises (if the `ContentJson` for the *entire activity* is an array).
+
+Let's refactor the component and the types to match this cleaner, better design.
+
+---
+
+### **Step 1: Refine the TypeScript Types**
+
+We will remove the concept of "pages" from the type definition.
+
+**File: `src/types/activityContentTypes.ts` (Refined)**
+```typescript
+// --- REFINED: Type for Recognition Grid Activity ---
+// This now represents a SINGLE grid/exercise.
+export interface GridItem {
+    id: number;
+    imageUrl: string;
+    audioUrl: string;
+}
+
+export interface RecognitionGridContent {
+    title: string;
+    gridItems: GridItem[];
+    correctItemIds: number[];
+}
+```
+This type now perfectly matches your desired JSON structure.
+
+---
+
+### **Step 2: Refactor the `<RecognitionGrid />` Component**
+
+We will simplify the component by removing all the state and logic related to `currentPageIndex`. It will now only manage the state for a single grid.
+
+**File: `src/components/activities/activity-types/RecognitionGrid.tsx` (Refactored and Final)**
+```typescript
+import React, 'react';
+import { useState, useEffect, useRef } from 'react';
+import { Box, Typography, Paper, Grid, IconButton, Fab } from '@mui/material';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ReplayIcon from '@mui/icons-material/Replay';
+import VolumeUpIcon from '@mui/icons-material/VolumeUp';
+import { RecognitionGridContent } from '../../../types/activityContentTypes';
+
+// The props now expect the simpler, single-grid content structure
+interface RecognitionGridProps {
+    content: RecognitionGridContent;
+}
+
+const RecognitionGrid: React.FC<RecognitionGridProps> = ({ content }) => {
+    // State is now simpler: just for the items found in THIS grid
+    const [foundItems, setFoundItems] = useState<number[]>([]);
+    const [currentItemToFindIndex, setCurrentItemToFindIndex] = useState(0);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    const itemsToFind = content.correctItemIds;
+    const currentItemToFind = content.gridItems.find(item => item.id === itemsToFind[currentItemToFindIndex]);
+
+    // Reset the game when the content prop changes
+    useEffect(() => {
+        setFoundItems([]);
+        setCurrentItemToFindIndex(0);
+    }, [content]);
+
+    // Automatically play the sound for the next item to find
+    useEffect(() => {
+        if (currentItemToFind?.audioUrl) {
+            const timer = setTimeout(() => playAudio(currentItemToFind.audioUrl), 500);
+            return () => clearTimeout(timer);
+        }
+    }, [currentItemToFind]);
+
+    const playAudio = (audioUrl: string) => {
+        if (audioRef.current) {
+            audioRef.current.src = audioUrl;
+            audioRef.current.play().catch(e => console.error("Audio playback failed:", e));
+        }
+    };
+
+    const handleImageClick = (clickedItemId: number) => {
+        if (foundItems.includes(clickedItemId) || !currentItemToFind) return;
+
+        if (clickedItemId === currentItemToFind.id) {
+            // Correct guess
+            setFoundItems(prev => [...prev, clickedItemId]);
+            // Move to the next item to find on this page
+            setCurrentItemToFindIndex(prev => prev + 1);
+        }
+        // Optional: Add feedback for incorrect clicks here
+    };
+    
+    const handleReset = () => {
+        setFoundItems([]);
+        setCurrentItemToFindIndex(0);
+    };
+
+    const isComplete = foundItems.length === itemsToFind.length;
+
+    return (
+        <Box p={2} sx={{ fontFamily: 'sans-serif', textAlign: 'center', height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Typography variant="h5" component="h1" gutterBottom>{content.title}</Typography>
+            
+            <Paper elevation={2} sx={{ p: 1, mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+                <Typography variant="h6">Listen:</Typography>
+                <IconButton onClick={() => currentItemToFind && playAudio(currentItemToFind.audioUrl)} disabled={isComplete}>
+                    <VolumeUpIcon fontSize="large" color="primary" />
+                </IconButton>
+            </Paper>
+
+            <Box sx={{ flexGrow: 1 }}>
+                <Grid container spacing={2} justifyContent="center" alignItems="center">
+                    {content.gridItems.map(item => (
+                        <Grid item key={item.id} xs={6} sm={4}>
+                            <Paper
+                                onClick={() => handleImageClick(item.id)}
+                                sx={{
+                                    position: 'relative', cursor: 'pointer', overflow: 'hidden',
+                                    borderRadius: '8px', border: '2px solid transparent',
+                                    transition: 'transform 0.2s', '&:hover': { transform: 'scale(1.05)' }
+                                }}
+                            >
+                                <img src={item.imageUrl} alt={`item ${item.id}`} style={{ width: '100%', display: 'block' }} />
+                                {foundItems.includes(item.id) && (
+                                    <Box sx={{ /* Checkmark overlay styles */ }}>
+                                        <CheckCircleIcon sx={{ fontSize: 60, color: 'white' }} />
+                                    </Box>
+                                )}
+                            </Paper>
+                        </Grid>
+                    ))}
+                </Grid>
+            </Box>
+            
+            <Box sx={{ height: '80px', mt: 2, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {isComplete && (
+                    <Box textAlign="center">
+                        <Typography variant="h5" color="success.main">Well Done!</Typography>
+                        <Button startIcon={<ReplayIcon />} onClick={handleReset}>
+                            Play Again
+                        </Button>
+                    </Box>
+                )}
+            </Box>
+
+            <audio ref={audioRef} style={{ display: 'none' }} />
+        </Box>
+    );
+};
+
+export default RecognitionGrid;
+```
+
+---
+
+### **Step 3: Correct the `ActivityRenderer.tsx`**
+
+The renderer will now pass a single exercise object to this component.
+
+**File: `src/components/activities/previews/ActivityRenderer.tsx` (Corrected)**
+```typescript
+// ... (imports)
+import RecognitionGrid from '../activity-types/RecognitionGrid';
+import { RecognitionGridContent } from '../../../types/activityContentTypes';
+
+// ...
+
+const ActivityRenderer: React.FC<ActivityRendererProps> = ({ activityTypeId, content }) => {
+    // ...
+
+    switch (activityTypeId) {
+        case 2:
+            // This type guard is now simpler and more direct
+            if ('gridItems' in content && 'correctItemIds' in content) {
+                return <RecognitionGrid content={content as RecognitionGridContent} />;
+            }
+            // ... (rest of case 2 logic)
+            break;
+        // ... (other cases)
+    }
+};
+```
+
+### **Summary of the Refactoring**
+
+1.  **Simplified `ContentJson`:** The top-level `ContentJson` for an activity that contains multiple Recognition Grids will now be an **array** of `RecognitionGridContent` objects.
+2.  **Simplified Component:** The `<RecognitionGrid />` component is now a "dumb" component. It only knows how to render a **single grid**. It has no concept of "pages" or outer navigation.
+3.  **Player is in Control:** The `ActivityPlayerModal` is responsible for managing the array. It holds the `currentExerciseIndex` and passes only the single, current grid object (`exercises[currentExerciseIndex]`) down to the renderer.
+
+This is a much cleaner and more consistent architecture that perfectly aligns with the other components we have built. Your analysis was correct, and this refactoring makes the system more robust.
