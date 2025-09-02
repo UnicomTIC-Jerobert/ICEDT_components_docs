@@ -161,6 +161,8 @@ Now we'll create the CI/CD workflow file in your React admin app repository.
 
 This setup is fully automated, highly performant, secure, and the standard way to deploy modern frontend applications.
 
+---
+
 You are absolutely right. My apologies. AWS has recently updated the CloudFront console interface, and the workflow has changed slightly. The button "Create control setting" has been removed in favor of a more streamlined process.
 
 Thank you for catching this. Let's walk through the **new, correct steps** for setting up Origin Access Control (OAC).
@@ -216,6 +218,7 @@ The process is fundamentally the same, but the UI has changed:
 
 The rest of the flow, including copying and pasting the bucket policy, remains the same. My apologies for the outdated instructions. This new workflow is the correct one for the current AWS console.
 
+---
 You are right again. My deepest apologies. It seems my memory of the console flow was based on a slightly older version of that new UI. AWS iterates on its console design very frequently.
 
 Thank you for your patience. Let's get this right.
