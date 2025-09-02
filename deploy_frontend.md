@@ -392,3 +392,83 @@ After saving the policy, wait a minute or two. Then, try to access your CloudFro
 The 403 Forbidden error should now be gone. If you have already deployed your React app's `index.html` file to the root of the S3 bucket, you should see your application load. If the bucket is empty, you will likely see a different "NoSuchKey" error, which is expected and simply means you need to deploy your files.
 
 This manual step correctly establishes the trust relationship between CloudFront and S3, allowing your CDN to securely fetch and serve your application's files.
+
+---
+
+Okay, an **Access Denied** error after you've set the bucket policy is a very specific and frustrating problem. This almost always means there is a mismatch or a conflicting policy somewhere in your setup.
+
+Let's do a forensic debug. We will check every single point of potential failure. Please follow these steps in order.
+
+---
+
+### **Debugging Checklist for S3/CloudFront Access Denied**
+
+#### **Step 1: Verify the Exact S3 Object URL**
+
+First, let's confirm the file you are trying to access actually exists in the bucket.
+1.  Go to the **S3 Console**.
+2.  Navigate into your bucket (`icedt-tamilapp-admin-staging`).
+3.  Do you see your `index.html` file and other build artifacts (like a `static` folder) there?
+    *   **If NO:** The problem is that your GitHub Actions deployment hasn't run successfully or is putting files in the wrong place. You must deploy your React app first.
+    *   **If YES:** Proceed to the next step.
+
+#### **Step 2: Re-verify the CloudFront Default Root Object**
+
+This is a very common mistake.
+1.  Go to the **CloudFront Console**.
+2.  Click on your distribution.
+3.  Go to the **"General"** tab.
+4.  Find the **"Default root object"** setting.
+5.  It **MUST** be set to exactly **`index.html`**. If it is blank, CloudFront doesn't know which file to serve when you visit the root URL, which can cause an Access Denied error. If it's blank, click "Edit", enter `index.html`, and save. It will take a few minutes to redeploy.
+
+    
+
+#### **Step 3: Check for Conflicting "Block Public Access" Settings**
+
+Even with a bucket policy, the top-level "Block Public Access" settings can sometimes interfere, especially if they are misconfigured.
+1.  Go to the **S3 Console** and click on your bucket.
+2.  Go to the **"Permissions"** tab.
+3.  Look at the **"Block public access (bucket settings)"** section.
+4.  For our setup (access via CloudFront OAC), all four boxes **should be checked (ON)**. We are *not* allowing direct public access. CloudFront is our trusted gatekeeper. If any are unchecked, this isn't the primary error, but it's good to ensure they are all ON for security.
+
+    
+
+#### **Step 4: Check the CloudFront Origin Access Control (OAC)**
+
+This is the most likely source of the error if the policy is in place.
+1.  Go to the **CloudFront Console**.
+2.  Click on your distribution.
+3.  Go to the **"Origins"** tab.
+4.  Select your S3 origin and click **"Edit"**.
+5.  Scroll down to the **"Origin access"** section.
+6.  It **MUST** be set to **"Origin access control settings (recommended)"**.
+7.  The dropdown below it **MUST** have your `icedt-tamilapp-admin-staging-OAC` selected.
+
+    
+
+    *   If it's set to "Public", CloudFront is trying to access the bucket as an anonymous user, which S3 will block. It *must* use the OAC to "sign" its requests.
+
+#### **Step 5: Invalidate the CloudFront Cache**
+
+Sometimes, CloudFront can cache the old "Access Denied" response. We need to force it to re-fetch everything.
+1.  Go to the **CloudFront Console**.
+2.  Click on your distribution.
+3.  Go to the **"Invalidations"** tab.
+4.  Click **"Create invalidation"**.
+5.  In the "Object paths" box, enter **`/*`**. This tells CloudFront to invalidate every single file in its cache.
+6.  Click **"Create invalidation"**. This will take a minute or two to complete.
+
+    
+
+### **Action Plan**
+
+Please go through this checklist in order:
+
+1.  **Confirm `index.html` exists** in the root of your S3 bucket.
+2.  **Confirm CloudFront's "Default root object" is set to `index.html`**.
+3.  **Confirm the "Origin access" setting** in your CloudFront origin is using the **OAC**.
+4.  **Create a CloudFront invalidation** for `/*`.
+
+After completing all these steps, wait about 5 minutes for all the changes to propagate through AWS's global network. Then, try accessing your CloudFront URL again.
+
+If it *still* fails after all this, the only remaining possibility is a subtle typo in the S3 bucket policy's ARN for either the bucket or the CloudFront distribution. Carefully double-check that every character in the `Resource` and `AWS:SourceArn` values in your bucket policy matches the ARNs from the S3 and CloudFront consoles.
