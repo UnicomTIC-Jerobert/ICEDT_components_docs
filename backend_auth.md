@@ -1000,3 +1000,265 @@ You now have a complete, end-to-end implementation.
 5.  The controller returns the `UserProfileDto` to the client.
 
 This is a secure and efficient way to handle user profile data.
+
+---
+
+### **Progress Controller Isuuse**
+
+Of course. Let's build the complete implementation for these two important progress-tracking endpoints. This will provide the core functionality for your Teachers and Admins to monitor student progress.
+
+We'll follow our standard pattern: DTOs -> Repository -> Service -> Controller.
+
+---
+
+### **Step 1: Create the DTOs (Application Layer)**
+
+We need specific DTOs to shape the response for the summary and detailed progress views.
+
+**File: `src/ICEDT_TamilApp.Application/DTOs/Response/ProgressSummaryDto.cs` (New File)**
+```csharp
+namespace ICEDT_TamilApp.Application.DTOs.Response
+{
+    public class ProgressSummaryDto
+    {
+        public int UserId { get; set; }
+        public string Username { get; set; } = string.Empty;
+        public int CurrentLevelId { get; set; }
+        public string CurrentLevelName { get; set; } = string.Empty;
+        public int CurrentLessonId { get; set; }
+        public string CurrentLessonName { get; set; } = string.Empty;
+        public int TotalLessonsInLevel { get; set; }
+        public int CompletedLessonsInLevel { get; set; }
+        public int TotalActivitiesInLesson { get; set; }
+        public int CompletedActivitiesInLesson { get; set; }
+        public double OverallCourseCompletionPercentage { get; set; }
+    }
+}
+```
+
+**File: `src/ICEDT_TamilApp.Application/DTOs/Response/DetailedProgressDto.cs` (New File)**
+```csharp
+namespace ICEDT_TamilApp.Application.DTOs.Response
+{
+    public class DetailedProgressDto
+    {
+        public long ProgressId { get; set; }
+        public int ActivityId { get; set; }
+        public string ActivityTitle { get; set; } = string.Empty;
+        public int LessonId { get; set; }
+        public string LessonName { get; set; } = string.Empty;
+        public int LevelId { get; set; }
+        public string LevelName { get; set; } = string.Empty;
+        public bool IsCompleted { get; set; }
+        public int? Score { get; set; }
+        public DateTime CompletedAt { get; set; }
+    }
+}
+```
+
+---
+
+### **Step 2: Update the Repository Layer**
+
+We need to add new methods to our `IProgressRepository` to fetch this specific data efficiently.
+
+**File: `src/ICEDT_TamilApp.Domain/Interfaces/IProgressRepository.cs` (Add these methods)**
+```csharp
+public interface IProgressRepository
+{
+    // ... existing methods
+    Task<List<UserProgress>> GetDetailedProgressForUserAsync(int userId);
+    Task<int> GetTotalLessonCountAsync();
+    Task<int> GetCompletedLessonCountForUserAsync(int userId);
+}
+```
+
+**File: `src/ICEDT_TamilApp.Infrastructure/Repositories/ProgressRepository.cs` (Implement the methods)**
+```csharp
+public class ProgressRepository : IProgressRepository
+{
+    // ... constructor and existing methods
+
+    public async Task<List<UserProgress>> GetDetailedProgressForUserAsync(int userId)
+    {
+        // Eagerly load all related data needed for the DTO
+        return await _context.UserProgresses
+            .Where(p => p.UserId == userId)
+            .Include(p => p.Activity)
+                .ThenInclude(a => a.Lesson)
+                    .ThenInclude(l => l.Level)
+            .OrderByDescending(p => p.CompletedAt)
+            .ToListAsync();
+    }
+
+    public async Task<int> GetTotalLessonCountAsync()
+    {
+        return await _context.Lessons.CountAsync();
+    }
+
+    public async Task<int> GetCompletedLessonCountForUserAsync(int userId)
+    {
+        // This is a more complex query. It finds all lessons where the user has
+        // completed all activities.
+        return await _context.Lessons
+            .Where(l => l.Activities.Any() &&  // Ensure lesson has activities
+                        l.Activities.All(a => _context.UserProgresses
+                            .Any(up => up.UserId == userId && up.ActivityId == a.ActivityId && up.IsCompleted)))
+            .CountAsync();
+    }
+}
+```
+
+---
+
+### **Step 3: Update the Service Layer**
+
+Now we implement the core logic in `ProgressService`.
+
+**File: `src/ICEDT_TamilApp.Application/Services/Interfaces/IProgressService.cs` (Add these methods)**
+```csharp
+public interface IProgressService
+{
+    // ... existing methods for students
+    Task<ProgressSummaryDto> GetUserProgressSummaryAsync(int userId);
+    Task<List<DetailedProgressDto>> GetDetailedProgressForUserAsync(int userId);
+}
+```
+
+**File: `src/ICEDT_TamilApp.Application/Services/Implementation/ProgressService.cs` (Add these methods)**
+```csharp
+public class ProgressService : IProgressService
+{
+    // ... constructor and existing methods
+
+    public async Task<ProgressSummaryDto> GetUserProgressSummaryAsync(int userId)
+    {
+        var user = await _unitOfWork.Users.GetByIdAsync(userId);
+        if (user == null) throw new NotFoundException(nameof(User), userId);
+
+        var currentProgress = await _unitOfWork.Progress.GetCurrentProgressAsync(userId);
+        if (currentProgress == null || currentProgress.CurrentLesson == null || currentProgress.CurrentLesson.Level == null)
+        {
+            // Handle case where user might not have started yet
+            return new ProgressSummaryDto { UserId = userId, Username = user.Username, CurrentLessonName = "Not Started" };
+        }
+
+        var lesson = currentProgress.CurrentLesson;
+        var level = lesson.Level;
+
+        // Run queries in parallel for efficiency
+        var totalActivitiesTask = _unitOfWork.Progress.GetTotalActivitiesForLessonAsync(lesson.LessonId);
+        var completedActivitiesTask = _unitOfWork.Progress.GetCompletedActivitiesCountAsync(userId, lesson.LessonId);
+        var totalLessonsInLevelTask = _unitOfWork.Lessons.GetLessonCountByLevelIdAsync(level.LevelId); // New repo method needed
+        var completedLessonsInLevelTask = _unitOfWork.Progress.GetCompletedLessonCountForUserAsync(userId, level.LevelId); // New repo method needed
+        var totalCourseLessonsTask = _unitOfWork.Progress.GetTotalLessonCountAsync();
+        var totalCompletedCourseLessonsTask = _unitOfWork.Progress.GetCompletedLessonCountForUserAsync(userId);
+
+        await Task.WhenAll(
+            totalActivitiesTask, completedActivitiesTask, totalLessonsInLevelTask, 
+            completedLessonsInLevelTask, totalCourseLessonsTask, totalCompletedCourseLessonsTask
+        );
+
+        double overallCompletion = 0;
+        if (totalCourseLessonsTask.Result > 0)
+        {
+            overallCompletion = ((double)totalCompletedCourseLessonsTask.Result / totalCourseLessonsTask.Result) * 100;
+        }
+
+        return new ProgressSummaryDto
+        {
+            UserId = userId,
+            Username = user.Username,
+            CurrentLevelId = level.LevelId,
+            CurrentLevelName = level.LevelName,
+            CurrentLessonId = lesson.LessonId,
+            CurrentLessonName = lesson.LessonName,
+            TotalActivitiesInLesson = totalActivitiesTask.Result,
+            CompletedActivitiesInLesson = completedActivitiesTask.Result,
+            TotalLessonsInLevel = totalLessonsInLevelTask.Result,
+            CompletedLessonsInLevel = completedLessonsInLevelTask.Result,
+            OverallCourseCompletionPercentage = Math.Round(overallCompletion, 2)
+        };
+    }
+
+    public async Task<List<DetailedProgressDto>> GetDetailedProgressForUserAsync(int userId)
+    {
+        var user = await _unitOfWork.Users.GetByIdAsync(userId);
+        if (user == null) throw new NotFoundException(nameof(User), userId);
+
+        var progressLog = await _unitOfWork.Progress.GetDetailedProgressForUserAsync(userId);
+
+        return progressLog.Select(p => new DetailedProgressDto
+        {
+            ProgressId = p.ProgressId,
+            ActivityId = p.ActivityId,
+            ActivityTitle = p.Activity.Title ?? "Untitled",
+            LessonId = p.Activity.LessonId,
+            LessonName = p.Activity.Lesson.LessonName,
+            LevelId = p.Activity.Lesson.Level.LevelId,
+            LevelName = p.Activity.Lesson.Level.LevelName,
+            IsCompleted = p.IsCompleted,
+            Score = p.Score,
+            CompletedAt = p.CompletedAt
+        }).ToList();
+    }
+}
+```
+*(Note: This implementation requires adding a couple more helper methods to your repositories like `GetLessonCountByLevelIdAsync`, but the logic is straightforward.)*
+
+---
+
+### **Step 4: The `ProgressController` (Final Implementation)**
+
+The controller code you provided is already perfect. It correctly defines the routes and authorization, and delegates all the work to the service layer.
+
+**File: `src/ICEDT_TamilApp.Web/Controllers/ProgressController.cs` (Complete)**
+```csharp
+[ApiController]
+[Route("api/progress")]
+[Authorize]
+public class ProgressController : ControllerBase
+{
+    private readonly IProgressService _progressService;
+    public ProgressController(IProgressService progressService) => _progressService = progressService;
+
+    // --- Endpoints for Students ---
+    [HttpGet("current-lesson")]
+    [Authorize(Roles = "Student")]
+    public async Task<IActionResult> GetCurrentLesson() { /* ... */ }
+
+    [HttpPost("complete-activity")]
+    [Authorize(Roles = "Student")]
+    public async Task<IActionResult> CompleteActivity([FromBody] ActivityCompletionRequestDto request) { /* ... */ }
+
+    // --- Endpoints for Admins/Teachers ---
+    
+    /// <summary>
+    /// Gets a high-level summary of a specific user's progress.
+    /// </summary>
+    [HttpGet("user/{userId}/summary")]
+    [Authorize(Roles = "Admin, Teacher")]
+    [ProducesResponseType(typeof(ProgressSummaryDto), 200)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> GetUserProgressSummary(int userId)
+    {
+        var summary = await _progressService.GetUserProgressSummaryAsync(userId);
+        return Ok(summary);
+    }
+
+    /// <summary>
+    /// Gets a detailed log of all activities a specific user has completed.
+    /// </summary>
+    [HttpGet("user/{userId}/detailed")]
+    [Authorize(Roles = "Admin, Teacher")]
+    [ProducesResponseType(typeof(List<DetailedProgressDto>), 200)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> GetUserDetailedProgress(int userId)
+    {
+        var detailedProgress = await _progressService.GetDetailedProgressForUserAsync(userId);
+        return Ok(detailedProgress);
+    }
+}
+```
+
+You now have a complete, end-to-end implementation for your progress tracking features. Admins and Teachers can log into the React panel, navigate to a user's profile, and click "View Progress" to hit these new endpoints and see detailed analytics on a student's performance. 
