@@ -808,3 +808,195 @@ public class RefreshTokenRequestDto
     *   The client saves the new tokens and automatically retries the original API call that failed. The user experiences no interruption.
 
 Your authentication system is now production-ready, providing both strong security and a seamless user experience.
+
+---
+### **User profile Issue**
+Of course. Let's implement the complete flow for the `GET /api/users/me` endpoint.
+
+This involves creating the DTO, updating the service and repository interfaces, and then writing the implementation for both the repository and the service.
+
+---
+
+### **Step 1: Create the DTO**
+
+This DTO defines the shape of the data that will be sent back to the client. It's a subset of the `User` entity, specifically excluding sensitive information like the `PasswordHash` and `RefreshToken`.
+
+**File: `src/ICEDT_TamilApp.Application/DTOs/Response/UserProfileDto.cs` (New File)**
+```csharp
+namespace ICEDT_TamilApp.Application.DTOs.Response
+{
+    public class UserProfileDto
+    {
+        public int UserId { get; set; }
+        public string Username { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Role { get; set; } = string.Empty;
+        public bool IsEmailVerified { get; set; }
+        public DateTime CreatedAt { get; set; }
+    }
+}
+```
+
+---
+
+### **Step 2: Update the Repository Layer**
+
+The `IUserRepository` and `UserRepository` are the correct places for data access logic. While we already have a `GetByIdAsync`, creating a dedicated method for fetching a profile can be useful if you later want to include related data (like progress summaries) in the profile.
+
+**File: `src/ICEDT_TamilApp.Domain/Interfaces/IUserRepository.cs`**
+(Your existing `GetByIdAsync` is sufficient for this, so no changes are strictly needed here unless you want a more specific method name.)
+```csharp
+public interface IUserRepository
+{
+    Task<User?> GetByIdAsync(int id);
+    // ... other methods
+}
+```
+*If your `GetByIdAsync` already exists, you can just use that.*
+
+**File: `src/ICEDT_TamilApp.Infrastructure/Repositories/UserRepository.cs`**
+(The existing `GetByIdAsync` implementation is also sufficient.)
+```csharp
+public class UserRepository : IUserRepository
+{
+    // ...
+    public async Task<User?> GetByIdAsync(int id) => await _context.Users.FindAsync(id);
+    // ...
+}
+```
+
+---
+
+### **Step 3: Update the Service Layer**
+
+This is where the business logic and the mapping from the `User` entity to the `UserProfileDto` will happen.
+
+**1. Update the Service Interface**
+
+**File: `src/ICEDT_TamilApp.Application/Services/Interfaces/IUserService.cs` (Add this new method)**
+```csharp
+using ICEDT_TamilApp.Application.DTOs.Response;
+using System.Threading.Tasks;
+
+public interface IUserService
+{
+    // ... existing CRUD methods for admin
+    Task<UserProfileDto> GetUserProfileAsync(int userId);
+}
+```
+
+**2. Implement the Service Method**
+
+**File: `src/ICEDT_TamilApp.Application/Services/Implementation/UserService.cs` (Add this new method)**
+```csharp
+namespace ICEDT_TamilApp.Application.Services.Implementation
+{
+    public class UserService : IUserService
+    {
+        private readonly IUnitOfWork _unitOfWork;
+        private readonly ILogger<UserService> _logger; // Assuming you have a logger
+
+        public UserService(IUnitOfWork unitOfWork, ILogger<UserService> logger)
+        {
+            _unitOfWork = unitOfWork;
+            _logger = logger;
+        }
+
+        // ... existing admin-focused CRUD methods ...
+
+        // --- NEW METHOD IMPLEMENTATION ---
+        public async Task<UserProfileDto> GetUserProfileAsync(int userId)
+        {
+            _logger.LogInformation("Fetching profile for User ID: {UserId}", userId);
+            
+            var user = await _unitOfWork.Users.GetByIdAsync(userId);
+            
+            if (user == null)
+            {
+                _logger.LogWarning("User profile not found for User ID: {UserId}", userId);
+                // This is a critical error case. A logged-in user's ID from a valid token
+                // should always exist in the database.
+                throw new NotFoundException($"User with ID {userId} not found. This may indicate an issue with the token.");
+            }
+
+            // Map the entity to the DTO
+            return MapToUserProfileDto(user);
+        }
+
+        // --- Private Mapper Helper ---
+        private UserProfileDto MapToUserProfileDto(User user)
+        -        {
+            return new UserProfileDto
+            {
+                UserId = user.UserId,
+                Username = user.Username,
+                Email = user.Email,
+                Role = user.Role,
+                IsEmailVerified = user.IsEmailVerified,
+                CreatedAt = user.CreatedAt
+            };
+        }
+    }
+}
+```
+
+---
+
+### **Step 4: The `UsersController` (Already Correct)**
+
+Your `UsersController` code for this endpoint is already perfectly designed. It correctly retrieves the `userId` from the JWT claims and passes it to the service.
+
+**File: `src/ICEDT_TamilApp.Web/Controllers/UsersController.cs` (Complete and Correct)**
+```csharp
+using ICEDT_TamilApp.Application.DTOs.Response;
+using ICEDT_TamilApp.Application.Services.Interfaces;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
+using System.Threading.Tasks;
+
+[ApiController]
+[Route("api/[controller]")]
+[Authorize] // All endpoints here require a valid token
+public class UsersController : ControllerBase
+{
+    private readonly IUserService _userService;
+    public UsersController(IUserService userService) => _userService = userService;
+
+    // ... (your admin-only CRUD methods) ...
+
+    /// <summary>
+    /// Gets the profile of the currently authenticated user.
+    /// </summary>
+    [HttpGet("me")]
+    [ProducesResponseType(typeof(UserProfileDto), 200)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> GetMyProfile()
+    {
+        var userIdString = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userIdString) || !int.TryParse(userIdString, out var userId))
+        {
+            // This case should be rare with a valid token, but it's good practice to handle it.
+            return Unauthorized("User ID claim not found in token.");
+        }
+
+        var userProfile = await _userService.GetUserProfileAsync(userId);
+
+        // The service throws a NotFoundException if the user doesn't exist,
+        // which the middleware will handle and turn into a 404 response.
+        return Ok(userProfile);
+    }
+}
+```
+*Note: I've added a slightly more robust check for the `userId` claim to prevent potential errors if the token is malformed.*
+
+### **Final Check**
+
+You now have a complete, end-to-end implementation.
+1.  **A logged-in user** (student, teacher, or admin) makes a `GET` request to `/api/users/me` with their JWT in the `Authorization` header.
+2.  The `UsersController` extracts their `userId` securely from the token's claims.
+3.  It calls the `UserService`, which fetches the full `User` entity from the database via the `UserRepository`.
+4.  The service maps this entity to the safe `UserProfileDto`, ensuring sensitive data is not exposed.
+5.  The controller returns the `UserProfileDto` to the client.
+
+This is a secure and efficient way to handle user profile data.
