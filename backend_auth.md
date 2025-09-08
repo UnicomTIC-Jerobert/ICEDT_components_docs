@@ -1262,3 +1262,132 @@ public class ProgressController : ControllerBase
 ```
 
 You now have a complete, end-to-end implementation for your progress tracking features. Admins and Teachers can log into the React panel, navigate to a user's profile, and click "View Progress" to hit these new endpoints and see detailed analytics on a student's performance. 
+
+Of course. Here are the complete implementations for those two repository methods. They involve slightly more complex LINQ queries to get the exact counts you need efficiently from the database.
+
+---
+
+### **1. `GetLessonCountByLevelIdAsync` Method**
+
+This method is straightforward and belongs in the `LessonRepository`.
+
+#### **Interface Update**
+
+**File: `src/ICEDT_TamilApp.Domain/Interfaces/ILessonRepository.cs` (Add this method)**
+```csharp
+public interface ILessonRepository
+{
+    // ... existing methods
+    Task<int> GetLessonCountByLevelIdAsync(int levelId);
+}
+```
+
+#### **Implementation**
+
+**File: `src/ICEDT_TamilApp.Infrastructure/Repositories/LessonRepository.cs` (Add this method)**
+```csharp
+namespace ICEDT_TamilApp.Infrastructure.Repositories
+{
+    public class LessonRepository : ILessonRepository
+    {
+        private readonly ApplicationDbContext _context;
+        public LessonRepository(ApplicationDbContext context) => _context = context;
+
+        // ... existing methods ...
+
+        /// <summary>
+        /// Efficiently counts the number of lessons within a specific level.
+        /// </summary>
+        /// <param name="levelId">The ID of the parent level.</param>
+        /// <returns>The total count of lessons.</returns>
+        public async Task<int> GetLessonCountByLevelIdAsync(int levelId)
+        {
+            // The CountAsync method is translated directly to a COUNT(*) SQL query,
+            // which is highly performant.
+            return await _context.Lessons.CountAsync(l => l.LevelId == levelId);
+        }
+    }
+}
+```
+
+---
+
+### **2. `GetCompletedLessonCountForUserAsync` Method (for a specific level)**
+
+This method is more complex and belongs in the `ProgressRepository`. It needs to check which lessons within a given level have had all their activities completed by a specific user.
+
+#### **Interface Update**
+
+First, let's update the interface to accept the `levelId` parameter.
+
+**File: `src/ICEDT_TamilApp.Domain/Interfaces/IProgressRepository.cs` (Modify/Add this method)**
+```csharp
+public interface IProgressRepository
+{
+    // ... existing methods
+    Task<int> GetTotalLessonCountAsync();
+    Task<int> GetCompletedLessonCountForUserAsync(int userId); // This gets the total for the whole course
+    
+    // --- ADD THIS NEW, MORE SPECIFIC METHOD ---
+    Task<int> GetCompletedLessonCountForUserAsync(int userId, int levelId);
+}
+```
+
+#### **Implementation**
+
+**File: `src/ICEDT_TamilApp.Infrastructure/Repositories/ProgressRepository.cs` (Add this method)**
+```csharp
+namespace ICEDT_TamilApp.Infrastructure.Repositories
+{
+    public class ProgressRepository : IProgressRepository
+    {
+        private readonly ApplicationDbContext _context;
+        public ProgressRepository(ApplicationDbContext context) => _context = context;
+
+        // ... existing methods ...
+
+        /// <summary>
+        /// Counts the number of lessons within a specific level that a user has fully completed.
+        /// A lesson is considered complete if the user has a 'IsCompleted' record for ALL of its activities.
+        /// </summary>
+        /// <param name="userId">The ID of the user.</param>
+        /// <param name="levelId">The ID of the level to check within.</param>
+        /// <returns>The count of completed lessons in that level.</returns>
+        public async Task<int> GetCompletedLessonCountForUserAsync(int userId, int levelId)
+        {
+            // This LINQ query is powerful. It translates to a complex but efficient SQL query.
+            return await _context.Lessons
+                // 1. Filter to only include lessons from the specified level.
+                .Where(lesson => lesson.LevelId == levelId)
+                
+                // 2. Filter further: the lesson must have at least one activity.
+                .Where(lesson => lesson.Activities.Any())
+                
+                // 3. The crucial condition: ALL activities within that lesson...
+                .Where(lesson => lesson.Activities.All(activity => 
+                    
+                    // ...must have a corresponding record in UserProgresses...
+                    _context.UserProgresses.Any(progress =>
+                        progress.UserId == userId &&
+                        progress.ActivityId == activity.ActivityId &&
+                        progress.IsCompleted
+                    )
+                ))
+                // 4. Finally, count how many lessons passed all these conditions.
+                .CountAsync();
+        }
+
+        // You would keep the other version of the method for the overall course completion percentage
+        public async Task<int> GetCompletedLessonCountForUserAsync(int userId)
+        {
+             return await _context.Lessons
+                .Where(l => l.Activities.Any() &&
+                            l.Activities.All(a => _context.UserProgresses
+                                .Any(up => up.UserId == userId && up.ActivityId == a.ActivityId && up.IsCompleted)))
+                .CountAsync();
+        }
+    }
+}
+```
+
+With these two methods fully implemented, your `ProgressService` will now have all the data access capabilities it needs to build the `ProgressSummaryDto` correctly and efficiently.
