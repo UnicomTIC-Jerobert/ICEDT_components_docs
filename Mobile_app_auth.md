@@ -275,3 +275,95 @@ export default LoginScreen;
 ```
 
 This provides a complete, step-by-step plan to integrate the exact same authentication architecture into your Expo app. The core logic remains the same; only the UI components and the secure storage mechanism (`AsyncStorage`) are different.
+
+---
+
+You've asked a fantastic question. The concepts of "Private Routes" and "Redirection" are handled quite differently in a mobile app compared to a web app, even though the goal is the same: **controlling what the user can see based on their authentication status.**
+
+In a web app (like your React admin panel), we use a `<PrivateRoute />` component that either renders a page or redirects using the browser's URL history.
+
+In a mobile app using a library like **React Navigation**, the approach is more elegant and is built directly into the navigator's structure.
+
+---
+
+### **The Mobile App Approach: Conditional Stacks**
+
+Instead of creating a separate `<PrivateRoute />` wrapper component, the standard and most effective pattern in React Navigation is to define **different sets of screens (or "stacks")** based on the authentication state.
+
+The `RootNavigator` we designed in the last step already implements this exact pattern. Let's analyze it more deeply to see why it's the correct mobile equivalent of a Private Route.
+
+**File: `expo-app/src/navigation/RootNavigator.tsx` (Annotated)**
+```typescript
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useAuth } from '../context/AuthContext';
+// ... import screens
+
+const Stack = createNativeStackNavigator();
+
+const RootNavigator = () => {
+    // 1. Get the global authentication state from our context.
+    const { isAuthenticated, isLoading } = useAuth();
+
+    // 2. Handle the initial loading state (very important for UX).
+    if (isLoading) {
+        // While we are checking AsyncStorage for a token, show a loading screen.
+        // This prevents the app from flashing the login screen before realizing the user is already signed in.
+        return <SplashScreen />; // Or a simple ActivityIndicator
+    }
+
+    // 3. The core of "Private Routing" and "Redirection" happens here.
+    return (
+        <NavigationContainer>
+            <Stack.Navigator>
+                {isAuthenticated ? (
+                    // --- THE "PRIVATE ROUTES" STACK ---
+                    // If the user IS authenticated, these are the only screens
+                    // that exist in the navigation stack. It's impossible for the
+                    // user to navigate to the "Login" screen.
+                    <>
+                        <Stack.Screen name="Home" component={HomeScreen} />
+                        <Stack.Screen name="Lesson" component={LessonScreen} />
+                        <Stack.Screen name="ActivityPlayer" component={ActivityPlayerScreen} />
+                    </>
+                ) : (
+                    // --- THE "PUBLIC ROUTES" STACK ---
+                    // If the user IS NOT authenticated, these are the only screens
+                    // that exist. The "Home" screen is not even in the navigation tree.
+                    // The first screen in this stack ("Login") becomes the default starting page.
+                    <>
+                        <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+                        <Stack.Screen name="Register" component={RegisterScreen} />
+                        <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+                    </>
+                )}
+            </Stack.Navigator>
+        </NavigationContainer>
+    );
+};
+
+export default RootNavigator;
+```
+
+### **How This Achieves Private Routes and Redirection**
+
+1.  **"Private Routes" are Implicit:**
+    *   The screens inside the `isAuthenticated ? (...)` block are your private routes. They are only defined and accessible when `isAuthenticated` is `true`.
+    *   If a developer tries to programmatically navigate to `navigation.navigate('Home')` when the user is logged out, React Navigation will throw an error because the "Home" screen doesn't exist in the current navigation tree. This provides a strong, inherent protection.
+
+2.  **"Redirection" is Automatic:**
+    *   **Login:** When a user successfully logs in, the `login()` function in your `AuthContext` sets `isAuthenticated` to `true`. This causes the entire `RootNavigator` component to re-render. The condition `isAuthenticated ? ... : ...` now evaluates to the "private" stack. React Navigation automatically unmounts the "public" stack (Login, Register) and mounts the "private" stack, showing the first screen in that stack (`HomeScreen`) by default. **This is your automatic redirect on login.**
+    *   **Logout:** When a user logs out, the `logout()` function sets `isAuthenticated` to `false`. The `RootNavigator` re-renders again. The "private" stack is unmounted, and the "public" stack is mounted. The user is automatically taken to the first screen of that stack, which is the `LoginScreen`. **This is your automatic redirect on logout.**
+
+### **Summary: Web vs. Mobile**
+
+| Feature | Web (React with React Router) | Mobile (React Native with React Navigation) |
+| :--- | :--- | :--- |
+| **Mechanism** | A wrapper component (`<PrivateRoute />`) that checks a condition and uses a `<Navigate />` component for redirection. | A conditional rendering block (`isAuthenticated ? ... : ...`) inside the root navigator that defines entirely different sets of available screens. |
+| **How it feels** | "Redirecting" the user by changing the URL. | "Swapping out" the entire navigation state of the app. |
+| **Implementation**| Create a reusable `<PrivateRoute />` component. | Structure your main `RootNavigator.tsx` to conditionally render different `Stack.Screen` groups based on the `useAuth()` hook. |
+
+**Conclusion:**
+
+You do not need to build a separate `<PrivateRoute />` component for your mobile app. The **conditional stack** pattern within your `RootNavigator` is the standard, idiomatic, and most effective way to handle private routes and redirection in a React Native application. The code structure we've already designed correctly implements this pattern.
