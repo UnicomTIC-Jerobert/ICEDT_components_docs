@@ -1,4 +1,4 @@
-> ** USER **
+> ### ** USER **
 > We have plan this app to publish in Google play store, but this project is done by us ,
 > but our client did  this project previously but they discontinued,
 > but this project we scratchly developed by us without using their previous code ,
@@ -6,6 +6,7 @@
 >
 > Note our client gave credentials to play store and the previous app also exists there
 
+---
 This is an excellent and very important question that deals with app store management, branding, and technical migration. Handling this correctly is crucial for a smooth launch.
 
 Since you have access to the client's existing Google Play Store listing, you have two primary strategies. **Strategy B is strongly recommended.**
