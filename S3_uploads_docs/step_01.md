@@ -1026,3 +1026,299 @@ Here's a step-by-step guide on how to test your `POST /api/media/upload-single` 
         *   **500 Internal Server Error:** This means the request was valid, but an unhandled exception occurred in your `MediaService` (e.g., your AWS credentials were wrong, the bucket name was incorrect, or there was another bug). You would then need to check your .NET application's console logs to see the detailed exception stack trace.
 
 That's all there is to it. The process is the same for the `upload-multiple` endpoint, except the `file` parameter in Swagger will allow you to select multiple files at once.
+
+Ah, I see exactly what's happening. You are seeing a less user-friendly version of the Swagger UI for file uploads.
+
+This happens when Swagger tries to generate a UI for the `IFormFile` type but doesn't have enough information to create the simple "Choose File" button. Instead, it breaks down the `IFormFile` object into all its individual properties (`ContentType`, `ContentDisposition`, `Headers`, `Length`, `Name`, `FileName`), which is not what you want and is impossible to use.
+
+**The Cause:**
+This is often due to an older version of Swashbuckle or a slight misconfiguration that prevents it from correctly interpreting `IFormFile` as a file upload field.
+
+**The Solution:**
+We can fix this easily. The recommended approach is to ensure you are using an up-to-date version of Swashbuckle and, if necessary, slightly adjust your controller action to be more explicit for Swagger's benefit.
+
+---
+
+### **Step 1: Update Swashbuckle Package (Recommended First Step)**
+
+Older versions sometimes had issues with this. Let's ensure you are on a recent, stable version.
+
+1.  Open the terminal in your project's root directory.
+2.  Run the update command:
+    ```bash
+    dotnet add src/ICEDT_TamilApp.Web/ICEDT_TamilApp.Web.csproj package Swashbuckle.AspNetCore
+    ```
+    This will update the package to the latest stable version. Clean and rebuild your project (`dotnet clean`, then `dotnet build`) and check the Swagger UI again. For many people, this alone fixes the issue. If it doesn't, proceed to Step 2.
+
+---
+
+### **Step 2: Simplify the Controller Action**
+
+Sometimes, complex method signatures can confuse the UI generator. While your current code is correct, we can simplify it to ensure Swagger understands it. Let's combine the form data into a single DTO.
+
+**1. Create a DTO for the Form Data**
+
+**File: `src/ICEDT_TamilApp.Application/DTOs/Request/FileUploadRequestDto.cs` (Create this new file)**
+```csharp
+using Microsoft.AspNetCore.Http;
+using System.ComponentModel.DataAnnotations;
+
+namespace ICEDT_TamilApp.Application.DTOs.Request
+{
+    public class FileUploadRequestDto
+    {
+        [Required]
+        public IFormFile File { get; set; }
+
+        [Required]
+        public int LevelId { get; set; }
+
+        [Required]
+        public int LessonId { get; set; }
+
+        [Required]
+        public string MediaType { get; set; } = string.Empty;
+    }
+}
+```
+
+**2. Refactor the `MediaController` Action**
+
+Now, modify your controller to accept this single DTO. The `[FromForm]` attribute on the DTO class tells the model binder to look for these properties in the form data.
+
+**File: `src/ICEDT_TamilApp.Web/Controllers/MediaController.cs` (Refactored)**
+```csharp
+// ... (usings)
+using ICEDT_TamilApp.Application.DTOs.Request;
+
+// ...
+
+[HttpPost("upload-single")]
+[ProducesResponseType(typeof(MediaUploadResponseDto), 200)]
+[ProducesResponseType(400)]
+public async Task<IActionResult> UploadSingleFile([FromForm] FileUploadRequestDto request)
+{
+    // The model binder will automatically populate the 'request' object.
+    // The [ApiController] attribute will handle validation.
+    
+    var result = await _mediaService.UploadSingleFileAsync(request.File, request.LevelId, request.LessonId, request.MediaType);
+    
+    return Ok(result);
+}
+
+// You can do the same for the multiple file upload if needed, just make the File property an `List<IFormFile>`
+```
+
+**3. Refactor the `IMediaService` and `MediaService`**
+Your service methods should now accept the DTO to stay consistent, or you can keep them as they are and just pass the properties from the DTO. Keeping them separate is fine.
+
+```csharp
+// In IMediaService.cs (no change needed)
+Task<MediaUploadResponseDto> UploadSingleFileAsync(IFormFile file, int levelId, int lessonId, string mediaType);
+
+// In MediaService.cs (no change needed)
+public async Task<MediaUploadResponseDto> UploadSingleFileAsync(IFormFile file, int levelId, int lessonId, string mediaType)
+{
+    // Logic remains exactly the same
+}
+```
+
+### **Why this Refactoring Works**
+
+By grouping all the form parameters into a single DTO and marking it with `[FromForm]`, you are giving Swagger a much clearer hint about how to build the UI.
+
+When it sees `[FromForm] FileUploadRequestDto`, it will:
+1.  Look inside the `FileUploadRequestDto` class.
+2.  See the `IFormFile File` property and correctly render the **"Choose File" button** for it.
+3.  See the other properties (`LevelId`, `LessonId`, `MediaType`) and render standard text input fields for them.
+
+This will result in the simple, user-friendly UI you were originally expecting.
+
+**Action Plan:**
+1.  Update your Swashbuckle package.
+2.  If that doesn't work, implement the DTO and controller refactoring from Step 2.
+3.  Rebuild and run your project.
+4.  Check the Swagger UI again. You should now see the correct file upload interface.
+
+### USER : 
+got this error while checking post api
+
+### RESPONSE : 
+This is a classic AWS credentials error, and the stack trace gives us a perfect roadmap to the solution. This error occurs when the AWS SDK for .NET tries to create the `IAmazonS3` client but cannot find any valid credentials.
+
+Let's break down the error message from your screenshot.
+
+### **Analyzing the Error Message**
+
+> Amazon.Runtime.AmazonClientException: **Failed to resolve AWS credentials.** The credential providers used to search for credentials returned the following errors:
+
+This is the main error. The SDK is telling you it failed to find any valid way to authenticate with AWS. It then lists the four methods it tried, in order:
+
+1.  **`Exception 1 of 4: The environment variables AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN were not set...`**
+    *   It first checked if you had set up credentials as system-wide environment variables. You haven't, so it failed. This is expected.
+
+2.  **`Exception 2 of 4: The webIdentityTokenFile must be an absolute path...`**
+    *   This relates to a specific IAM role feature for containers (like Kubernetes) and doesn't apply to your EC2 setup. It failed, which is expected.
+
+3.  **`Exception 3 of 4: Unable to find the "default" profile.`**
+    *   It then looked for a credentials file on the server (usually at `~/.aws/credentials`) for a profile named `[default]`. This is common for local development machines but usually not set up on a server. It failed, which is also expected.
+
+4.  **`Exception 4 of 4: Failed to connect to EC2 instance metadata to retrieve credentials: Unable to get IAM security credentials from EC2 Instance Metadata Service..`**
+    *   **This is the most important failure.** This is the method we *expect* to work on an EC2 instance. The SDK tries to contact a special local address on the server (`169.254.169.254`) to ask the EC2 service for temporary, secure credentials from the attached IAM Role. This attempt failed.
+
+The stack trace then shows this error bubbling up through all the Dependency Injection layers until it crashes your application when trying to create the `MediaService`.
+
+### **The Root Cause**
+
+The error `Failed to connect to EC2 instance metadata` points to one of two problems:
+
+1.  **No IAM Role is Attached to the EC2 Instance (Most Likely Cause):** You may have created the IAM role (`EC2-S3-ReadOnly-Role` or similar), but it was never successfully attached to the running EC2 instance.
+2.  **Network or Proxy Issue on the Server:** In very rare cases, a network configuration or a misconfigured proxy on the server itself can block the instance from talking to its own metadata service. This is highly unlikely on a standard AWS Ubuntu image.
+
+Let's focus on the most likely cause.
+
+---
+
+### **The Solution: Verify and Attach the IAM Role**
+
+You need to go into the AWS Console and ensure your EC2 instance has the correct IAM role attached to it.
+
+1.  **Go to the EC2 Dashboard** in the AWS Management Console.
+2.  Click on **"Instances"** in the left-hand navigation.
+3.  **Find and select your instance** (`TamilApp-Staging-Server`) by checking the box next to its name.
+4.  In the details panel at the bottom, click on the **"Security"** tab.
+5.  Look for the **"IAM role"** field.
+    *   **If this field says "None" or is empty, this is your problem.** The instance has no permissions to talk to other AWS services.
+    *   **If a role is listed,** click on it to verify that it has the necessary permissions (e.g., `AmazonS3FullAccess` or a custom policy that allows `s3:PutObject` on your bucket). The `AmazonS3ReadOnlyAccess` we set up for CodeDeploy is NOT enough for your application to *upload* files.
+
+    
+
+#### **How to Fix it:**
+
+**Case A: No IAM Role is Attached**
+
+1.  With your instance still selected, click the **"Actions"** button at the top right.
+2.  Navigate to **Security -> Modify IAM role**.
+3.  In the "IAM role" dropdown, **select the role** you created for your EC2 instance. **IMPORTANT:** This role needs S3 write permissions. Let's create a new, better role.
+    *   Go to IAM -> Roles -> Create Role.
+    *   Use Case: `EC2`.
+    *   Permissions: Search for and attach the AWS-managed policy named **`AmazonS3FullAccess`**. (This is fine for your testing environment).
+    *   Name the role `EC2-App-Role`.
+    *   Go back and attach this new `EC2-App-Role` to your instance.
+4.  Click **"Update IAM role"**.
+
+**Case B: The Wrong IAM Role is Attached**
+
+1.  Follow the same steps as above to **"Modify IAM role"**.
+2.  Select the correct role (`EC2-App-Role` with `AmazonS3FullAccess`) from the dropdown and save.
+
+### **Final Step: Restart the Application**
+
+After you have attached the correct IAM role in the AWS Console, the change takes effect almost immediately. However, your application crashed on startup, so the service is likely in a failed state.
+
+1.  **SSH into your EC2 instance.**
+2.  **Restart the service** to force it to try authenticating with AWS again.
+    ```bash
+    sudo systemctl restart icedt_tamilapp.service
+    ```
+3.  **Check the status** to ensure it's running.
+    ```bash
+    sudo systemctl status icedt_tamilapp.service
+    ```
+
+Now, go back to Swagger and try the `POST /api/media/upload-single` endpoint again. The AWS SDK will now successfully retrieve credentials from the attached IAM role, and your file upload should succeed.
+
+### USER :
+the error that occured is in my local development environment , i didnt push this code in staging server as well
+
+# RESPONSE
+Ah, that clarifies everything! Thank you.
+
+The error message makes perfect sense now. When you run the application on your **local development machine**, it is **not** running inside an AWS EC2 instance. Therefore, **Exception 4 of 4** (`Failed to connect to EC2 instance metadata`) is completely normal and expected. Your local machine has no access to that special AWS service.
+
+The real problem is that the SDK tried all four methods and failed. For local development, we expect **Exception 3 of 4** (`Unable to find the "default" profile`) or a method involving `appsettings.json` to be the one that works.
+
+The error you're seeing means your application is not finding the AWS credentials in any of the standard locations it checks on a local machine.
+
+---
+
+### **The Cause**
+
+When we refactored the `MediaService`, we set it up to get credentials from your `appsettings.Development.json` file. The DI setup in `Program.cs` reads this file.
+
+```csharp
+// In Program.cs
+builder.Services.AddDefaultAWSOptions(builder.Configuration.GetAWSOptions());
+builder.Services.AddAWSService<IAmazonS3>();
+```
+This setup tells the AWS SDK to look for a section named `"AWS"` in your `appsettings.json` or `appsettings.Development.json`.
+
+The error indicates one of two things:
+1.  The `"AWS"` section in your `appsettings.Development.json` is missing or has incorrect keys.
+2.  Your application is not running in the `Development` environment, so it's not loading the `appsettings.Development.json` file where your keys are stored.
+
+### **The Solution: Configure Your Local Environment Correctly**
+
+Let's ensure your local setup is correct.
+
+#### **Step 1: Verify `appsettings.Development.json`**
+
+1.  Open your `src/ICEDT_TamilApp.Web/appsettings.Development.json` file.
+2.  Make sure it contains a top-level section named `"AWS"` with your IAM User's credentials. It must look **exactly** like this:
+
+    ```json
+    {
+      "Logging": {
+        // ...
+      },
+      "ConnectionStrings": {
+        // ...
+      },
+      "AWS": {
+        "Region": "eu-north-1", // Your AWS Region
+        "MediaBucketName": "icedt-tamilapp-media", // Your S3 bucket name
+        "AccessKey": "YOUR_IAM_USER_ACCESS_KEY_ID", // <-- PASTE YOUR KEY HERE
+        "SecretKey": "YOUR_IAM_USER_SECRET_ACCESS_KEY" // <-- PASTE YOUR SECRET HERE
+      }
+    }
+    ```
+    *   **Crucially, the keys are `AccessKey` and `SecretKey`**. The SDK is smart enough to map these to the required `AWSAccessKeyId` and `AWSSecretKey`. Make sure there are no typos.
+    *   Ensure you have replaced the placeholder values with your actual, valid IAM User keys.
+
+#### **Step 2: Verify Your Local Launch Environment**
+
+You need to ensure that when you run the project locally, ASP.NET Core knows it's in "Development" mode.
+
+1.  In your `Web` project, look for a folder named `Properties`.
+2.  Inside it, open the `launchSettings.json` file.
+3.  This file defines launch profiles for IIS and Kestrel (the `dotnet run` command uses the second profile).
+4.  Find the profile you use to run the app (usually the one named after your project, e.g., `ICEDT_TamilApp.Web` or `https`).
+5.  Inside that profile, look for the `environmentVariables` section and make sure `ASPNETCORE_ENVIRONMENT` is set to `Development`.
+
+    ```json
+    {
+      "profiles": {
+        "https": {
+          "commandName": "Project",
+          "dotnetRunMessages": true,
+          "launchBrowser": true,
+          "launchUrl": "swagger",
+          "applicationUrl": "https://localhost:7123;http://localhost:5123",
+          "environmentVariables": {
+            // THIS LINE IS CRITICAL FOR LOCAL DEVELOPMENT
+            "ASPNETCORE_ENVIRONMENT": "Development" 
+          }
+        },
+        // ... other profiles
+      }
+    }
+    ```
+    If this line is missing or set to `Production`, your app will not load `appsettings.Development.json`, and therefore it will not find your AWS keys.
+
+### **Action Plan to Fix:**
+
+1.  **Confirm the `"AWS"` section** exists and is correctly spelled in your `appsettings.Development.json` file with your actual keys.
+2.  **Confirm that your `launchSettings.json`** file has `"ASPNETCORE_ENVIRONMENT": "Development"` for the profile you are using.
+3.  **Restart your application** from VS Code or by using `dotnet run --project src/ICEDT_TamilApp.Web`.
+
+After these checks, the AWS SDK will successfully find the credentials from your configuration file when running locally, and the `AmazonClientException` will be resolved.
