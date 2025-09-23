@@ -204,3 +204,155 @@ Let's consider some hypothetical examples to solidify the concept:
 | **`Extensions/` (for Application Services)**| **`TamilApp.Application`**| The extension logically belongs with the service it is extending. |
 
 Your current placement of both folders in the `Api` (now `Web`) project is **correct** for their specific purposes. You are following the principles of Clean Architecture well.
+
+### USER
+if you notice my existing repo , i had placed the Exceptions , under middlewares , so it is hard to refactor , since those exceptions used in controllers (web layer) and service ( application) , so where can i place this sort out this issue
+
+### RESPONSE
+You've pinpointed a classic challenge in layered architecture: how to handle cross-cutting concerns like custom exceptions. Your observation is spot on—having the `ExceptionHandlingMiddleware` (which is a **Web** concern) in the same place as your custom exception classes (which can be used by the **Application** layer) creates a messy dependency.
+
+Let's sort this out cleanly. The key is to recognize that the **definition** of an exception and the **handling** of that exception are two different responsibilities that belong in different layers.
+
+---
+
+### **The Correct Placement Strategy**
+
+Here’s where each piece should go in a proper Clean Architecture setup:
+
+#### **1. Custom Exception Classes**
+
+*   **Where they are thrown:** Your custom exceptions (like a hypothetical `NotFoundException` or `ValidationException`) are typically thrown from your **Application layer** (`AuthService`, `LessonService`, etc.) when a business rule is violated or data isn't found.
+*   **Purpose:** They represent specific, known error states within your business logic.
+*   **Correct Placement:** Custom exception classes should go into a new folder in your **`TamilApp.Application`** project.
+
+    ```
+    TamilApp.Application/
+    ├── Exceptions/
+    │   ├── NotFoundException.cs
+    │   └── ValidationException.cs
+    ├── Dtos/
+    └── Services/
+    ```
+
+**Why this is the right place:**
+*   **Business Logic Context:** These exceptions are part of your application's use cases. A "Lesson Not Found" condition is an application-level concept.
+*   **Dependency Flow:** The `Application` layer can define and throw these exceptions without needing any dependencies on the outer layers. The `Web` layer will then need a reference to the `Application` project to be able to catch them, which is the correct dependency direction (`Web -> Application`).
+
+**Example: `NotFoundException.cs`**
+```csharp
+// In: src/TamilApp.Application/Exceptions/NotFoundException.cs
+namespace TamilApp.Application.Exceptions
+{
+    public class NotFoundException : Exception
+    {
+        public NotFoundException(string message) : base(message)
+        {
+        }
+
+        public NotFoundException(string name, object key)
+            : base($"Entity \"{name}\" ({key}) was not found.")
+        {
+        }
+    }
+}
+```
+
+Now, your service can use it like this:
+```csharp
+// In your LessonService.cs (Application Layer)
+public async Task<LessonDto> GetLessonByIdAsync(int id)
+{
+    var lesson = await _lessonRepository.GetByIdAsync(id);
+    if (lesson == null)
+    {
+        // Throwing a specific, custom exception from the Application layer.
+        throw new NotFoundException(nameof(Lesson), id);
+    }
+    // ... map to DTO and return
+}
+```
+
+#### **2. Exception Handling Middleware**
+
+*   **Where it acts:** This middleware lives in the HTTP pipeline. Its job is to catch unhandled exceptions (including your custom ones) and convert them into a user-friendly `HTTP` response (like a JSON error object with a 404 or 400 status code).
+*   **Purpose:** It is a **presentation-layer** concern. It translates application errors into web responses.
+*   **Correct Placement:** Your `ExceptionHandlingMiddleware.cs` class is already in the correct project: **`TamilApp.Web`**. You should keep it there.
+
+**Why this is the right place:**
+*   **Web-Specific Dependencies:** This middleware directly uses `HttpContext`, `HttpRequest`, `HttpResponse`, status codes, etc. These are all part of `Microsoft.AspNetCore.Http`, which belongs exclusively in the `Web` layer.
+*   **Decoupling:** Your `Application` layer doesn't know or care that its exceptions will be turned into a JSON response by a piece of middleware. It could just as easily be running in a console app where the exception would be logged to the console.
+
+**Refactoring the Middleware to handle your new Custom Exceptions:**
+
+Your `ExceptionHandlingMiddleware` in the `Web` project can now be updated to specifically look for your custom exception types.
+
+```csharp
+// In: src/TamilApp.Web/Middleware/ExceptionHandlingMiddleware.cs
+using System.Net;
+using System.Text.Json;
+using TamilApp.Application.Exceptions; // Add this using statement!
+
+namespace TamilApp.Web.Middleware
+{
+    public class ExceptionHandlingMiddleware
+    {
+        // ... (constructor and InvokeAsync method signature)
+
+        public async Task InvokeAsync(HttpContext context)
+        {
+            try
+            {
+                await _next(context);
+            }
+            catch (Exception ex)
+            {
+                await HandleExceptionAsync(context, ex);
+            }
+        }
+
+        private static async Task HandleExceptionAsync(HttpContext context, Exception exception)
+        {
+            var statusCode = HttpStatusCode.InternalServerError; // Default to 500
+            var problemDetails = new
+            {
+                status = (int)statusCode,
+                title = "An unexpected error occurred.",
+                detail = exception.Message
+            };
+
+            // *** NEW LOGIC TO HANDLE SPECIFIC EXCEPTION TYPES ***
+            switch (exception)
+            {
+                case NotFoundException notFoundException:
+                    statusCode = HttpStatusCode.NotFound; // 404
+                    problemDetails = new { status = (int)statusCode, title = "Resource not found.", detail = notFoundException.Message };
+                    break;
+                case ValidationException validationException: // A hypothetical validation exception
+                    statusCode = HttpStatusCode.BadRequest; // 400
+                    problemDetails = new { status = (int)statusCode, title = "Validation Error.", detail = validationException.Message };
+                    break;
+                // You can add more cases here for other custom exceptions
+            }
+
+            context.Response.ContentType = "application/json";
+            context.Response.StatusCode = (int)statusCode;
+            var json = JsonSerializer.Serialize(problemDetails);
+            await context.Response.WriteAsync(json);
+        }
+    }
+}
+```
+
+---
+
+### **Summary of Refactoring Steps:**
+
+1.  **Create a New Folder:** In your `TamilApp.Application` project, create a folder named `Exceptions`.
+2.  **Move Custom Exception Classes:** Move any custom exception classes you've defined (or will define) from `Web/Middleware` into `Application/Exceptions`. Update their namespaces accordingly.
+3.  **Keep the Middleware Class:** The `ExceptionHandlingMiddleware.cs` class itself stays in the `TamilApp.Web/Middleware` folder.
+4.  **Update Middleware `using`:** Add a `using TamilApp.Application.Exceptions;` statement at the top of `ExceptionHandlingMiddleware.cs` so it can recognize your custom exceptions.
+5.  **Enhance Middleware Logic:** Update the `HandleExceptionAsync` method with a `switch` statement to handle different custom exceptions and return appropriate HTTP status codes (like 404 for `NotFoundException`).
+
+By doing this, you perfectly resolve the dependency issue. Your layers are now clean:
+*   `Application` defines and throws business-specific errors.
+*   `Web` catches these errors and decides how to present them to the end-user over HTTP.
