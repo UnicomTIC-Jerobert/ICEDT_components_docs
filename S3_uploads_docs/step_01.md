@@ -1327,3 +1327,148 @@ You need to ensure that when you run the project locally, ASP.NET Core knows it'
 3.  **Restart your application** from VS Code or by using `dotnet run --project src/ICEDT_TamilApp.Web`.
 
 After these checks, the AWS SDK will successfully find the credentials from your configuration file when running locally, and the `AmazonClientException` will be resolved.
+
+### USER
+this issue is still  exist , so plz guide me to create access keys 
+
+### RESPONSE
+Of course. It sounds like the root of the problem might be the credentials themselves. Let's walk through the process of creating a **new, clean set of AWS Access Keys** specifically for your local development environment.
+
+We will create a dedicated IAM User for this purpose. This is a security best practice, as it allows you to grant this user only the permissions it needs (access to S3) and you can easily delete these keys later without affecting anything else.
+
+---
+
+### **Step-by-Step Guide: Creating a New IAM User and Access Keys**
+
+#### **Step 1: Navigate to IAM in the AWS Console**
+
+1.  Log in to your AWS Management Console.
+2.  In the top search bar, type **`IAM`** and select it.
+
+#### **Step 2: Create a New IAM User**
+
+1.  In the IAM dashboard, click on **"Users"** in the left-hand navigation pane.
+2.  Click the blue **"Create user"** button.
+3.  **User details:**
+    *   **User name:** `tamil-app-local-developer` (or any descriptive name).
+    *   **Do NOT** check the box for "Provide user access to the AWS Management Console". This user is for programmatic access only (via keys), not for logging into the website.
+    *   Click **"Next"**.
+
+    
+
+#### **Step 3: Set Permissions for the User**
+
+This is where we tell AWS what this user is allowed to do.
+
+1.  On the "Set permissions" page, select **"Attach policies directly"**.
+2.  A list of permission policies will appear. In the search box, type **`S3`**.
+3.  From the filtered list, check the box next to the policy named **`AmazonS3FullAccess`**. This policy grants the user full permissions to list, read, write, and delete objects in *any* S3 bucket in your account.
+    *(For a production environment, you would create a more restrictive custom policy that only grants access to your specific `icedt-tamilapp-media` bucket, but for development, `AmazonS3FullAccess` is simple and effective.)*
+4.  Click **"Next"**.
+
+    
+
+#### **Step 4: Review and Create the User**
+
+1.  On the review page, you will see the username and the attached `AmazonS3FullAccess` policy.
+2.  Click the **"Create user"** button.
+
+#### **Step 5: Retrieve the Access Keys (CRITICAL STEP)**
+
+You will be taken to a success page. **You must retrieve the keys now.**
+
+1.  Click on the name of the user you just created (`tamil-app-local-developer`).
+2.  This will take you to the user's summary page. Click on the **"Security credentials"** tab.
+3.  Scroll down to the **"Access keys"** section and click the **"Create access key"** button.
+
+    
+
+4.  On the "Access key best practices & alternatives" page:
+    *   Select **"Command Line Interface (CLI)"** as the use case. This is a common choice for programmatic access.
+    *   Check the box at the bottom to acknowledge the recommendation.
+    *   Click **"Next"**.
+
+    
+
+5.  (Optional) You can set a description tag to remember what this key is for, e.g., `Local Dev for Tamil App`. Then click **"Create access key"**.
+
+6.  **This is the final and most important screen.** You will be shown the **Access key ID** and the **Secret access key**.
+    *   **Copy the `Access key ID`** and paste it into your `appsettings.Development.json` file for the `AccessKey` value.
+    *   **Click "Show"** to reveal the `Secret access key`. **Copy this value immediately** and paste it into your `appsettings.Development.json` file for the `SecretKey` value.
+
+    
+
+    **WARNING:** You will **NEVER** be able to see the Secret Access Key again after you leave this screen. If you lose it, you must delete this access key and create a new one.
+
+#### **Step 6: Update Your `appsettings.Development.json`**
+
+Your `appsettings.Development.json` file in your `Web` project should now look like this, with the new, correct keys pasted in:
+
+```json
+{
+  // ...
+  "AWS": {
+    "Region": "eu-north-1",
+    "MediaBucketName": "icedt-tamilapp-media",
+    "AccessKey": "AKIAIOSFODNN7EXAMPLE", // <-- Paste the new Access Key ID here
+    "SecretKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" // <-- Paste the new Secret Access Key here
+  }
+}
+```
+
+#### **Final Step: Restart and Test**
+
+1.  Completely stop your .NET application if it's running.
+2.  Restart the application (e.g., using `dotnet run --project src/ICEDT_TamilApp.Web`).
+3.  Go to your Swagger UI and try the file upload endpoint again.
+
+The application will now load these new, guaranteed-to-be-correct credentials from your configuration file, and the AWS SDK should be able to successfully authenticate and upload your file.
+
+### USER
+do i need to install aws sdk locally to do this
+
+### RESPONSE
+No, you do **not** need to install the AWS CLI (Command Line Interface) or the full AWS SDK on your local machine for your **.NET application** to work.
+
+This is a very common point of confusion, so let's clarify why.
+
+### **How Your .NET Application Handles AWS Authentication**
+
+Your project uses the **AWS SDK for .NET**, which you've already added as **NuGet packages**.
+
+*   `AWSSDK.S3`
+*   `AWSSDK.Extensions.NETCore.Setup`
+
+These packages contain all the necessary libraries and code *inside* your application to communicate with AWS services.
+
+When your application starts, the code we wrote in `Program.cs` is executed:
+```csharp
+builder.Services.AddDefaultAWSOptions(builder.Configuration.GetAWSOptions());
+builder.Services.AddAWSService<IAmazonS3>();
+```
+This C# code does the work of finding the credentials. It has a built-in "credential chain" that it checks in a specific order. For your local development, this is what happens:
+
+1.  The SDK checks for specific environment variables (`AWS_ACCESS_KEY_ID`, etc.). (These are not set, so it continues).
+2.  It then checks the configuration passed to it via `AddDefaultAWSOptions`. This is where it finds the `"AWS"` section in your `appsettings.Development.json` file.
+3.  It reads the `AccessKey` and `SecretKey` from that JSON file.
+4.  It uses these keys to authenticate its API calls to S3.
+
+**The key takeaway is that the NuGet packages you installed are the "SDK" for your application. You don't need any other external installations for the C# code to function.**
+
+---
+
+### **When *Would* You Need the AWS CLI?**
+
+The AWS CLI is a separate, standalone tool that you install on your machine to manage AWS resources **from your terminal**.
+
+You would use it for tasks like:
+*   Manually uploading a file to S3: `aws s3 cp my-file.txt s3://my-bucket/`
+*   Listing your EC2 instances: `aws ec2 describe-instances`
+*   Configuring a local credentials profile (the `[default]` profile the error message mentioned).
+
+While the AWS CLI is an incredibly useful tool for DevOps and system administration, it is **not required for your C# application to run**. Your application handles its own connection to AWS using the built-in SDK libraries.
+
+**Conclusion:**
+
+You do not need to install anything else on your local machine. The problem you are facing is purely a configuration issue within your .NET project. By following the steps to create a new, clean set of access keys and placing them correctly in your `appsettings.Development.json` file, you will provide the necessary credentials for the already-installed AWS SDK for .NET to use.
+
